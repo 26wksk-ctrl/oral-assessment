@@ -127,6 +127,19 @@
   .overlay p{margin:0;font-size:17px;font-weight:600;}
   .overlay .small{font-size:14px;font-weight:400;color:var(--gray);margin-top:8px;}
 
+  /* ---------- 접수 완료 ---------- */
+  .done-wrap{text-align:center;margin-bottom:14px;}
+  .done-mark{font-size:56px;line-height:1;margin:2px 0 10px;}
+  .done-title{font-size:24px;font-weight:800;color:var(--green);margin:0 0 6px;letter-spacing:-.4px;}
+  .done-sub{font-size:15px;color:var(--gray);margin:0;}
+  .done-list{margin:0 0 18px;padding:0;border-top:1px solid var(--line);}
+  .done-list > div{
+    display:flex;justify-content:space-between;align-items:baseline;gap:12px;
+    padding:11px 2px;border-bottom:1px solid var(--line);
+  }
+  .done-list dt{font-size:15px;color:var(--gray);font-weight:600;flex:0 0 auto;}
+  .done-list dd{margin:0;font-size:17px;font-weight:700;text-align:right;word-break:break-all;}
+
   .hidden{display:none !important;}
   .foot{text-align:center;color:#98a1b0;font-size:12px;margin-top:18px;line-height:1.6;}
   .setup{margin-top:40px;text-align:center;}
@@ -166,7 +179,7 @@
   </div>
 
   <!-- 2. 학생 정보 -->
-  <div class="card">
+  <div class="card" id="infoCard">
     <h2>나의 정보</h2>
     <div class="field">
       <label for="studentId">학번</label>
@@ -181,7 +194,7 @@
   </div>
 
   <!-- 3. 녹음 -->
-  <div class="card">
+  <div class="card" id="recordCard">
     <h2>녹음하기</h2>
     <div class="rec-wrap">
       <div class="timer" id="timer">00:00<small id="timerLimit"></small></div>
@@ -201,6 +214,23 @@
     <div id="status" class="box"></div>
   </div>
 
+  <!-- 4. 접수 완료 -->
+  <div id="doneView" class="card hidden">
+    <div class="done-wrap">
+      <div class="done-mark">✅</div>
+      <p class="done-title">정상 접수 완료</p>
+      <p class="done-sub" id="doneSub">답변이 선생님께 정상 접수되었습니다.</p>
+    </div>
+    <dl class="done-list">
+      <div><dt>학번</dt><dd id="doneId">-</dd></div>
+      <div><dt>이름</dt><dd id="doneName">-</dd></div>
+      <div><dt>녹음 시간</dt><dd id="doneLength">-</dd></div>
+      <div><dt>접수 시각</dt><dd id="doneTime">-</dd></div>
+      <div><dt>평가</dt><dd id="doneEval">-</dd></div>
+    </dl>
+    <button id="btnAgain" class="btn-ghost">다음 학생 시작</button>
+  </div>
+
   <p class="foot" id="footNote">
     녹음 파일은 채점 후 선생님이 정리합니다.<br>제출이 안 되면 화면을 새로 고친 뒤 다시 해 보세요.
   </p>
@@ -211,7 +241,7 @@
   <div class="panel">
     <div class="spinner"></div>
     <p id="overlayText">녹음을 올리고 있어요…</p>
-    <p class="small">잠시만 기다려 주세요. 창을 닫지 마세요.</p>
+    <p class="small" id="overlaySub">잠시만 기다려 주세요. 창을 닫지 마세요.</p>
   </div>
 </div>
 
@@ -246,7 +276,9 @@
     blobUrl: '',
     mimeType: '',
     startedAt: 0,
+    recordedSeconds: 0,
     tickTimer: 0,
+    delayTimer: 0,
     isRecording: false,
     isSubmitting: false,
     wakeLock: null
@@ -275,7 +307,18 @@
     btnSubmit:   document.getElementById('btnSubmit'),
     status:      document.getElementById('status'),
     overlay:     document.getElementById('overlay'),
-    overlayText: document.getElementById('overlayText')
+    overlayText: document.getElementById('overlayText'),
+    overlaySub:  document.getElementById('overlaySub'),
+    infoCard:    document.getElementById('infoCard'),
+    recordCard:  document.getElementById('recordCard'),
+    doneView:    document.getElementById('doneView'),
+    doneSub:     document.getElementById('doneSub'),
+    doneId:      document.getElementById('doneId'),
+    doneName:    document.getElementById('doneName'),
+    doneLength:  document.getElementById('doneLength'),
+    doneTime:    document.getElementById('doneTime'),
+    doneEval:    document.getElementById('doneEval'),
+    btnAgain:    document.getElementById('btnAgain')
   };
 
   /* =======================================================================
@@ -289,8 +332,10 @@
     el.status.className = 'box';
     el.status.textContent = '';
   }
-  function showOverlay(text) {
+  var OVERLAY_SUB_DEFAULT = '잠시만 기다려 주세요. 창을 닫지 마세요.';
+  function showOverlay(text, sub) {
     el.overlayText.textContent = text || '처리 중입니다…';
+    el.overlaySub.textContent = sub || OVERLAY_SUB_DEFAULT;
     el.overlay.classList.add('show');
   }
   function hideOverlay() {
@@ -300,6 +345,31 @@
   function fmtClock(sec) {
     sec = Math.max(0, Math.floor(sec));
     return pad2(Math.floor(sec / 60)) + ':' + pad2(sec % 60);
+  }
+  /* 녹음 길이를 사람이 읽는 형태로: 42초 / 1분 05초 */
+  function fmtDuration(sec) {
+    sec = Math.round(Number(sec) || 0);
+    if (sec < 0) sec = 0;
+    if (sec < 60) return sec + '초';
+    return Math.floor(sec / 60) + '분 ' + pad2(sec % 60) + '초';
+  }
+  /* 서버가 준 '2026-11-28 10:12:33' → '11월 28일 10:12' */
+  function shortStamp(s) {
+    var m = String(s || '').match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+    if (m) return m[2] + '월 ' + m[3] + '일 ' + m[4] + ':' + m[5];
+    return String(s || '').trim() || '-';
+  }
+  /* 서버 응답에서 학생 이름 찾기 (studentName 우선, 없으면 안내 문구에서) */
+  function pickStudentName(data) {
+    if (!data) return '';
+    var raw = data.studentName ? String(data.studentName) : '';
+    if (!raw && data.message) {
+      var m = String(data.message).match(/제출되었습니다\.\s*([^,\n]{1,20}?)\s*학생/);
+      if (m) raw = m[1];
+    }
+    raw = String(raw || '').replace(/[\s\[\]{}<>"'`]+/g, ' ').trim();
+    if (!raw || raw.length > 20) return '';
+    return raw;
   }
   function setTimer(sec) {
     el.timer.innerHTML = fmtClock(sec) + '<small id="timerLimit">/ ' + fmtClock(state.maxSeconds) + '</small>';
@@ -519,6 +589,13 @@
 
   function stopRecording(isAuto) {
     if (!state.isRecording) return;
+
+    /* 녹음 길이 기록 (완료 화면에 표시) */
+    var elapsed = (Date.now() - state.startedAt) / 1000;
+    if (!isFinite(elapsed) || elapsed < 0) elapsed = 0;
+    if (elapsed > state.maxSeconds) elapsed = state.maxSeconds;
+    state.recordedSeconds = elapsed;
+
     try {
       if (state.mediaRecorder && state.mediaRecorder.state !== 'inactive') {
         state.mediaRecorder.stop();
@@ -549,6 +626,8 @@
     state.blobUrl = URL.createObjectURL(state.blob);
     el.preview.src = state.blobUrl;
     el.previewArea.classList.remove('hidden');
+    el.recHint.textContent = '녹음 길이 ' + fmtDuration(state.recordedSeconds) +
+      ' · 들어 보고 괜찮으면 제출하세요.';
     el.btnSubmit.disabled = false;
     el.btnSubmit.textContent = '제출하기';
   }
@@ -558,6 +637,7 @@
     if (state.blobUrl) { URL.revokeObjectURL(state.blobUrl); state.blobUrl = ''; }
     state.blob = null;
     state.chunks = [];
+    state.recordedSeconds = 0;
     el.preview.removeAttribute('src');
     el.previewArea.classList.add('hidden');
     el.recHint.textContent = '마이크 버튼을 누르면 녹음이 시작됩니다.';
@@ -580,6 +660,16 @@
       if (state.wakeLock) { state.wakeLock.release(); state.wakeLock = null; }
     } catch (e) {}
   }
+
+  /* 전송 중 실수로 창을 닫지 않도록 (전송 중에만) */
+  function warnLeave(e) {
+    if (!state.isSubmitting) return;
+    e.preventDefault();
+    e.returnValue = '';
+    return '';
+  }
+  function beforeUnloadOn()  { window.addEventListener('beforeunload', warnLeave); }
+  function beforeUnloadOff() { window.removeEventListener('beforeunload', warnLeave); }
 
   /* =======================================================================
    *  5. 제출
@@ -625,6 +715,54 @@
     return { studentId: sid, classCode: code };
   }
 
+  /* 30명이 같은 순간에 눌러도 서버로 한꺼번에 몰리지 않게 1~5초 무작위 지연 */
+  var SEND_DELAY_MIN = 1000;
+  var SEND_DELAY_MAX = 5000;
+
+  function waitBeforeSend() {
+    var waitMs = SEND_DELAY_MIN + Math.floor(Math.random() * (SEND_DELAY_MAX - SEND_DELAY_MIN + 1));
+    return new Promise(function (resolve) {
+      var tick = 0;
+      var started = Date.now();
+
+      function drawHint() {
+        var left = Math.ceil((waitMs - (Date.now() - started)) / 1000);
+        if (left < 0) left = 0;
+        el.overlaySub.textContent =
+          '여러 명이 함께 제출해도 차례대로 접수됩니다. 약 ' + left + '초 남았어요. 창을 닫지 마세요.';
+      }
+
+      showOverlay('잠시 후 전송됩니다…');
+      drawHint();
+      tick = setInterval(drawHint, 250);
+
+      state.delayTimer = setTimeout(function () {
+        state.delayTimer = 0;
+        clearInterval(tick);
+        resolve();
+      }, waitMs);
+    });
+  }
+
+  /* 접수 완료 화면: 학번·이름·녹음 시간·접수 시각을 크게 보여 준다 */
+  function showDone(info) {
+    var name = info.studentName || '';
+    el.doneId.textContent     = info.studentId || '-';
+    el.doneName.textContent   = name || '명단에서 확인';
+    el.doneLength.textContent = fmtDuration(info.seconds);
+    el.doneTime.textContent   = shortStamp(info.submittedAt);
+    el.doneEval.textContent   = info.evaluationName || '-';
+    el.doneSub.textContent    = name
+      ? name + ' 학생의 답변이 선생님께 정상 접수되었습니다.'
+      : '답변이 선생님께 정상 접수되었습니다.';
+
+    el.infoCard.classList.add('hidden');
+    el.recordCard.classList.add('hidden');
+    el.doneView.classList.remove('hidden');
+    hideStatus();
+    try { el.doneView.scrollIntoView({ block: 'center' }); } catch (e) {}
+  }
+
   function submit() {
     if (state.isSubmitting) return;
     if (!state.blob) {
@@ -634,19 +772,27 @@
     var input = validateInput();
     if (!input) return;
 
+    var blobToSend   = state.blob;
+    var mimeToSend   = state.mimeType || 'audio/webm';
+    var recordedSec  = state.recordedSeconds;
+
     state.isSubmitting = true;
     el.btnSubmit.disabled = true;
     el.btnRetry.disabled = true;
     el.btnRecord.disabled = true;
-    showOverlay('답변을 보내고 채점하는 중이에요…');
     hideStatus();
+    beforeUnloadOn();
+    showOverlay('잠시 후 전송됩니다…');
 
-    blobToBase64(state.blob).then(function (b64) {
+    waitBeforeSend().then(function () {
+      showOverlay('답변을 보내고 채점하는 중이에요…');
+      return blobToBase64(blobToSend);
+    }).then(function (b64) {
       var payload = {
         studentId: input.studentId,
         classCode: input.classCode,
         audioBase64: b64,
-        mimeType: state.mimeType || 'audio/webm'
+        mimeType: mimeToSend
       };
 
       var ctrl = ('AbortController' in window) ? new AbortController() : null;
@@ -686,21 +832,23 @@
         return;
       }
 
-      // 성공 → 다음 학생을 위해 입력칸과 녹음을 비운다 (성공 안내는 남긴다)
-      var okMsg = '✅ ' + (data.message || '제출되었습니다. 수고했어요!');
+      // 성공 → 학번·이름·녹음 시간이 보이는 접수 완료 화면
       if (state.blobUrl) { URL.revokeObjectURL(state.blobUrl); state.blobUrl = ''; }
       state.blob = null;
       state.chunks = [];
       el.preview.removeAttribute('src');
       el.previewArea.classList.add('hidden');
-      el.studentId.value = '';
-      el.classCode.value = '';
       el.btnSubmit.textContent = '제출하기';
       el.btnSubmit.disabled = true;
       el.btnRetry.disabled = false;
       setTimer(0);
-      el.recHint.textContent = '다음 학생은 학번·수업 코드를 넣고 🎤 녹음 시작을 누르세요.';
-      showStatus('ok', okMsg);
+      showDone({
+        studentId: data.studentId || input.studentId,
+        studentName: pickStudentName(data),
+        seconds: recordedSec,
+        submittedAt: data.submittedAt,
+        evaluationName: data.evaluationName || state.evaluationName
+      });
     }).catch(function (err) {
       var isAbort = err && err.name === 'AbortError';
       showStatus('err', isAbort
@@ -711,6 +859,7 @@
     }).then(function () {
       state.isSubmitting = false;
       el.btnRecord.disabled = false;
+      beforeUnloadOff();
       hideOverlay();
     });
   }
@@ -731,6 +880,25 @@
 
     el.btnSubmit.addEventListener('click', submit);
 
+    // 접수 완료 화면 → 다음 학생을 위해 초기 화면으로
+    el.btnAgain.addEventListener('click', function () {
+      el.doneView.classList.add('hidden');
+      el.infoCard.classList.remove('hidden');
+      el.recordCard.classList.remove('hidden');
+      resetRecording();
+      el.studentId.value = '';
+      el.classCode.value = '';
+      el.btnRecord.disabled = false;
+      el.btnSubmit.textContent = '제출하기';
+      el.btnSubmit.disabled = true;
+      el.btnRetry.disabled = false;
+      hideStatus();
+      setTimer(0);
+      el.recHint.textContent = '학번과 수업 코드를 넣고 🎤 녹음 시작을 누르세요.';
+      try { el.studentId.focus(); } catch (e) {}
+      try { window.scrollTo(0, 0); } catch (e) {}
+    });
+
     // 수업 코드는 숫자만, 4자리에서 자동으로 넘어감
     el.classCode.addEventListener('input', function () {
       this.value = this.value.replace(/[^0-9]/g, '').slice(0, 4);
@@ -749,6 +917,7 @@
 
     // 화면을 벗어날 때 마이크 정리
     window.addEventListener('pagehide', function () {
+      if (state.delayTimer) { clearTimeout(state.delayTimer); state.delayTimer = 0; }
       stopTimer();
       releaseStream();
       releaseWakeLock();
